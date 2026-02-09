@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: weekly-schedule-notifier
+  namespace: weekly-schedule-notifier
+spec:
+  # Run every Monday at 9:00 AM UTC
+  schedule: "0 9 * * 1"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: weekly-schedule-notifier
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: schedule-notifier
+            image: registry.access.redhat.com/ubi9/python-311:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              pip install -q click slack-sdk
+              python /app/schedule_notifier.py --notify-slack
+            env:
+            - name: SLACK_CHANNEL
+              valueFrom:
+                configMapKeyRef:
+                  name: weekly-schedule-config
+                  key: SLACK_CHANNEL
+            - name: SCHEMA
+              valueFrom:
+                configMapKeyRef:
+                  name: weekly-schedule-config
+                  key: SCHEMA
+            - name: SLACK_USER_MAPPING
+              valueFrom:
+                configMapKeyRef:
+                  name: weekly-schedule-config
+                  key: SLACK_USER_MAPPING
+            - name: SLACK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: weekly-schedule-secret
+                  key: SLACK_TOKEN
+            volumeMounts:
+            - name: app-code
+              mountPath: /app
+          volumes:
+          - name: app-code
+            configMap:
+              name: weekly-schedule-app

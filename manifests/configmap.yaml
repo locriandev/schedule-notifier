@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: weekly-schedule-config
+  namespace: weekly-schedule-notifier
+data:
+  # Slack channel for notifications
+  SLACK_CHANNEL: "#dpaolell-test"
+
+  # Path to the schema file (mounted from this ConfigMap)
+  SCHEMA: "/config/schema.txt"
+
+  # Slack user ID mapping (display name -> Slack user ID)
+  SLACK_USER_MAPPING: |
+    {
+      "Fabio": "U0A0N29FUQK",
+      "Michael": "U04JLK3F04R",
+      "Luis": "UDWSG7LSK",
+      "Daniele": "U02NV63HBHV",
+      "Joep": "UMDFFDKU5"
+    }
+
+  # Weekly rotation schedule
+  schema.txt: |
+    ├───────────────┼────────────────────────┼──────────────────┤
+    | Week starting | Release artistry (3)   | Focused work (2) |
+    ├───────────────┼────────────────────────┼──────────────────┤
+    | Feb 9, 2026   | Fabio, Michael, Luis   | Daniele, Joep    |
+    ├───────────────┼────────────────────────┼──────────────────┤
+    | Feb 16, 2026  | Daniele, Joep, Fabio   | Michael, Luis    |
+    ├───────────────┼────────────────────────┼──────────────────┤
+    | Feb 23, 2026  | Michael, Luis, Daniele | Fabio, Joep      |
+    ├───────────────┼────────────────────────┼──────────────────┤
+    | Mar 2, 2026   | Joep, Fabio, Michael   | Luis, Daniele    |
+    ├───────────────┼────────────────────────┼──────────────────┤
+    | Mar 9, 2026   | Luis, Daniele, Joep    | Fabio, Michael   |
+    ├───────────────┼────────────────────────┼──────────────────┤
