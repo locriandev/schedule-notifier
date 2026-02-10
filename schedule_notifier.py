@@ -14,6 +14,8 @@ Environment Variables:
                    Example: '#art-release'
     SLACK_USER_MAPPING: JSON mapping from display names to Slack user IDs (optional)
                         Example: '{"Daniele": "U12345678", "Fabio": "U87654321"}'
+    SLACK_USER_GROUP_ID: Slack user group ID to manage (optional)
+                         Example: 'SQ2NYLU56'
 
 Examples:
     # Set the SCHEMA environment variable
@@ -32,6 +34,11 @@ Examples:
     export SLACK_TOKEN=xoxb-your-token
     export SLACK_CHANNEL='#art-release'
     export SLACK_USER_MAPPING='{"Fabio": "U12345678", "Michael": "U23456789", "Luis": "U34567890", "Daniele": "U45678901", "Joep": "U56789012"}'
+    python schedule_notifier.py --notify-slack
+
+    # Update Slack user group with release artistry team (preserves non-managed members)
+    # This happens automatically when SLACK_USER_GROUP_ID is set
+    export SLACK_USER_GROUP_ID='SQ2NYLU56'
     python schedule_notifier.py --notify-slack
 
     # Dry run mode (logs Slack messages without sending)
@@ -87,8 +94,10 @@ class ScheduleNotifier:
         self.schedule: List[Tuple[datetime, List[str], List[str]]] = []
         self.slack_client: Optional[WebClient] = None
         self.slack_user_mapping: Dict[str, str] = {}
+        self.slack_user_group_id: Optional[str] = None
         self._load_schedule()
         self._load_slack_user_mapping()
+        self._load_slack_user_group_id()
 
     def new_slack_client(self, token: Optional[str] = None, channel: Optional[str] = None) -> None:
         """
@@ -98,9 +107,9 @@ class ScheduleNotifier:
             token (Optional[str]): Slack API token. If None, reads from SLACK_TOKEN env var.
             channel (Optional[str]): Slack channel. If None, reads from SLACK_CHANNEL env var.
         """
-        if not token and not self.dry_run:
+        if not token:
             token = os.environ.get("SLACK_TOKEN")
-            if not token:
+            if not token and not self.dry_run:
                 raise ValueError("SLACK_TOKEN environment variable is not set")
 
         if not channel:
@@ -118,10 +127,12 @@ class ScheduleNotifier:
 
         self.slack_channel = channel
 
-        if not self.dry_run:
+        # Only create real client if we have a token (needed for fetching current state even in dry-run)
+        if token:
             self.slack_client = WebClient(token=token)
         else:
             self.slack_client = None
+            self.logger.info("[DRY RUN] No SLACK_TOKEN provided, will simulate without fetching current state")
 
     @staticmethod
     def _parse_schedule_line(line: str) -> Optional[Tuple[datetime, List[str], List[str]]]:
@@ -203,6 +214,14 @@ class ScheduleNotifier:
                 self.logger.warning("Failed to parse SLACK_USER_MAPPING: %s", e)
                 self.slack_user_mapping = {}
 
+    def _load_slack_user_group_id(self) -> None:
+        """
+        Load Slack user group ID from environment variable.
+        """
+        self.slack_user_group_id = os.environ.get("SLACK_USER_GROUP_ID")
+        if self.slack_user_group_id:
+            self.logger.info("Loaded Slack user group ID: %s", self.slack_user_group_id)
+
     @staticmethod
     def _calculate_week_in_cycle(schedule_start: datetime, target_date: datetime, cycle_length: int) -> int:
         """
@@ -282,6 +301,116 @@ class ScheduleNotifier:
                 self.logger.warning("No Slack user ID found for '%s', using @mention fallback", name)
 
         return ", ".join(formatted)
+
+    def _get_managed_user_ids(self) -> set:
+        """
+        Get the set of user IDs that are managed by this schedule system.
+
+        Return Value(s):
+            set: Set of Slack user IDs for users in the SLACK_USER_MAPPING.
+        """
+        return set(self.slack_user_mapping.values())
+
+    def _get_user_group_members(self) -> List[str]:
+        """
+        Get the current members of the Slack user group.
+
+        Return Value(s):
+            List[str]: List of Slack user IDs in the user group.
+        """
+        if not self.slack_client:
+            self.logger.info("[DRY RUN] No Slack client available, cannot fetch current user group members")
+            return []
+
+        try:
+            response = self.slack_client.usergroups_users_list(usergroup=self.slack_user_group_id)
+            members = response.get("users", [])
+            log_prefix = "[DRY RUN] " if self.dry_run else ""
+            self.logger.info("%sCurrent user group has %d members: %s", log_prefix, len(members), members)
+            return members
+
+        except SlackApiError as e:
+            self.logger.error("Failed to get user group members: %s", e.response["error"])
+            raise
+
+    def _update_user_group(self, release_artistry_names: List[str]) -> None:
+        """
+        Update the Slack user group with the current release artistry team.
+        Preserves any members that are not managed by this system.
+
+        Arg(s):
+            release_artistry_names (List[str]): Names of people on release artistry duty.
+        """
+        if not self.slack_user_group_id:
+            self.logger.info("No SLACK_USER_GROUP_ID configured, skipping user group update")
+            return
+
+        # Get IDs of users who should be in the group (on release artistry)
+        release_artistry_ids = set()
+        for name in release_artistry_names:
+            if name in self.slack_user_mapping:
+                release_artistry_ids.add(self.slack_user_mapping[name])
+            else:
+                self.logger.warning("No Slack user ID found for '%s', cannot add to user group", name)
+
+        # Get current members (may be empty if no Slack client available)
+        current_members = set(self._get_user_group_members())
+
+        # Identify which users are managed by this system
+        managed_user_ids = self._get_managed_user_ids()
+
+        # Preserve non-managed members (users not in our SLACK_USER_MAPPING)
+        preserved_members = current_members - managed_user_ids
+
+        # Build the new member list: preserved members + release artistry team
+        new_members = list(preserved_members | release_artistry_ids)
+
+        if self.dry_run:
+            self.logger.info("[DRY RUN] Would update user group %s", self.slack_user_group_id)
+            if current_members:
+                self.logger.info("[DRY RUN] Preserved %d non-managed members: %s", len(preserved_members), preserved_members if preserved_members else "none")
+                self.logger.info("[DRY RUN] Release artistry members to add: %s", release_artistry_ids)
+                self.logger.info("[DRY RUN] New member list would be: %s", new_members)
+
+                # Show what would change
+                added = release_artistry_ids - current_members
+                removed = (current_members & managed_user_ids) - release_artistry_ids
+                if added:
+                    self.logger.info("[DRY RUN] Would add to group: %s", added)
+                if removed:
+                    self.logger.info("[DRY RUN] Would remove from group: %s", removed)
+                if not added and not removed:
+                    self.logger.info("[DRY RUN] No changes needed, group already up to date")
+            else:
+                self.logger.info("[DRY RUN] Release artistry members that would be added: %s", release_artistry_ids)
+                self.logger.info("[DRY RUN] (Cannot show full diff without current member list)")
+            return
+
+        # Check if update is needed
+        if current_members == set(new_members):
+            self.logger.info("User group is already up to date, no changes needed")
+            return
+
+        try:
+            response = self.slack_client.usergroups_users_update(
+                usergroup=self.slack_user_group_id,
+                users=",".join(new_members)
+            )
+            self.logger.info("User group updated successfully")
+            self.logger.info("Preserved %d non-managed members", len(preserved_members))
+            self.logger.info("Added %d release artistry members", len(release_artistry_ids))
+
+            # Log the changes for visibility
+            added = release_artistry_ids - current_members
+            removed = (current_members & managed_user_ids) - release_artistry_ids
+            if added:
+                self.logger.info("Added to group: %s", added)
+            if removed:
+                self.logger.info("Removed from group: %s", removed)
+
+        except SlackApiError as e:
+            self.logger.error("Failed to update user group: %s", e.response["error"])
+            raise
 
     def send_schedule_notification(self, schedule_data: Dict[str, List[str]], target_date: datetime) -> None:
         """
@@ -391,6 +520,7 @@ def main(
         if notify_slack:
             notifier.new_slack_client()
             notifier.send_schedule_notification(schedule_data, target_date)
+            notifier._update_user_group(schedule_data["release_artistry"])
             if dry_run:
                 click.echo(f"[DRY RUN] Would send Slack notification to {notifier.slack_channel}")
             else:

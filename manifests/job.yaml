@@ -36,6 +36,11 @@ spec:
             configMapKeyRef:
               name: weekly-schedule-config
               key: SLACK_USER_MAPPING
+        - name: SLACK_USER_GROUP_ID
+          valueFrom:
+            configMapKeyRef:
+              name: weekly-schedule-config
+              key: SLACK_USER_GROUP_ID
         - name: SLACK_TOKEN
           valueFrom:
             secretKeyRef:
@@ -44,7 +49,15 @@ spec:
         volumeMounts:
         - name: app-code
           mountPath: /app
+        - name: schedule-config
+          mountPath: /config
       volumes:
       - name: app-code
         configMap:
           name: weekly-schedule-app
+      - name: schedule-config
+        configMap:
+          name: weekly-schedule-config
+          items:
+          - key: schema.txt
+            path: schema.txt

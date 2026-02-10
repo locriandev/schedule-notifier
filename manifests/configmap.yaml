@@ -5,7 +5,10 @@ metadata:
   namespace: weekly-schedule-notifier
 data:
   # Slack channel for notifications
-  SLACK_CHANNEL: "#dpaolell-test"
+  SLACK_CHANNEL: "#ocp-sustaining-art-collaboration"
+
+  # Slack user group to manage (@release-artists)
+  SLACK_USER_GROUP_ID: "SQ2NYLU56"
 
   # Path to the schema file (mounted from this ConfigMap)
   SCHEMA: "/config/schema.txt"
